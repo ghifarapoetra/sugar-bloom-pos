@@ -52,37 +52,8 @@
       { id: 'p2', name: 'Donat Ubi Ungu', price: 3000, desc: 'Donat ubi ungu pilihan, manis & lezat', active: true },
     ];
 
-    const DEFAULT_TRANSACTIONS = [
-      {
-        id: 'tx-101',
-        date: new Date(Date.now() - 3600000 * 4).toISOString(),
-        type: 'INCOME',
-        category: 'Penjualan Donat',
-        amount: 18000,
-        account: 'BCA',
-        description: 'Order Kak Sarah - 6 pcs Donat',
-        customerName: 'Sarah',
-        customerPhone: '081234567890',
-        status: 'Lunas',
-        items: [
-          { name: 'Donat Labu Kuning (Susu Coklat)', qty: 3, price: 3000, subtotal: 9000 },
-          { name: 'Donat Ubi Ungu (Susu Putih)', qty: 3, price: 3000, subtotal: 9000 }
-        ]
-      },
-      {
-        id: 'tx-102',
-        date: new Date(Date.now() - 3600000 * 24).toISOString(),
-        type: 'EXPENSE',
-        category: 'Belanja Bahan Baku (Labu/Ubi/Tepung)',
-        amount: 50000,
-        account: 'Tunai',
-        description: 'Beli Tepung Cakra & Labu Kuning 2kg',
-        customerName: '',
-        customerPhone: '',
-        status: 'Lunas',
-        items: []
-      }
-    ];
+    // Transaksi awal diset KOSONG agar saldo mulai dari Rp 0
+    const DEFAULT_TRANSACTIONS = [];
 
     // Main React Application
     function App() {
@@ -178,7 +149,7 @@
         return { total, itemsList };
       }, [cartItems, products]);
 
-      // Cashflow Metrics
+      // Cashflow Metrics (Otomatis terhitung ulang saat transaksi ditambah/dihapus)
       const cashFlowMetrics = useMemo(() => {
         let totalIncome = 0;
         let totalExpense = 0;
@@ -278,9 +249,21 @@
         showToast('💸 Pengeluaran belanja berhasil dicatat!');
       };
 
+      // Fitur Hapus Transaksi Tunggal
       const handleDeleteTransaction = (id) => {
-        setTransactions(transactions.filter(t => t.id !== id));
-        showToast('🗑️ Transaksi dihapus.');
+        if (confirm('Apakah Anda yakin ingin menghapus transaksi ini? Saldo akan dihitung ulang.')) {
+          setTransactions(transactions.filter(t => t.id !== id));
+          showToast('🗑️ Transaksi berhasil dihapus!');
+        }
+      };
+
+      // Fitur Reset Semua Data Transaksi ke Rp 0
+      const handleResetAllTransactions = () => {
+        if (confirm('⚠️ Yakin ingin menghapus seluruh riwayat transaksi? Semua saldo akan kembali ke Rp 0.')) {
+          setTransactions([]);
+          localStorage.removeItem('sb_transactions');
+          showToast('🔄 Semua saldo berhasil di-reset ke Rp 0!');
+        }
       };
 
       // WA Invoice Text Generator
@@ -694,7 +677,17 @@ Terima kasih sudah mendukung langkah kecil Sugar Bloom. Semoga setiap gigitan me
                 </div>
 
                 <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm">
-                  <h3 className="font-bold text-slate-800 text-sm mb-4">Rincian Saldo Per Rekening</h3>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-bold text-slate-800 text-sm">Rincian Saldo Per Rekening</h3>
+                    {transactions.length > 0 && (
+                      <button
+                        onClick={handleResetAllTransactions}
+                        className="text-xs font-bold text-rose-600 hover:bg-rose-50 px-3 py-1.5 rounded-xl border border-rose-200 transition-colors"
+                      >
+                        🔄 Reset Semua Data ke Rp 0
+                      </button>
+                    )}
+                  </div>
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
                     {ACCOUNTS.map(acc => (
                       <div key={acc} className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-center">
@@ -755,21 +748,34 @@ Terima kasih sudah mendukung langkah kecil Sugar Bloom. Semoga setiap gigitan me
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 font-medium">
-                      {filteredTransactions.map(t => (
-                        <tr key={t.id} className="hover:bg-slate-50">
-                          <td className="px-4 py-3 text-slate-500">
-                            {new Date(t.date).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })}
-                          </td>
-                          <td className="px-4 py-3 font-bold text-slate-900">{t.description}</td>
-                          <td className="px-4 py-3"><span className="px-2 py-0.5 rounded bg-slate-100 font-bold">{t.account}</span></td>
-                          <td className={`px-4 py-3 text-right font-bold text-sm ${t.type === 'INCOME' ? 'text-emerald-600' : 'text-rose-600'}`}>
-                            {t.type === 'INCOME' ? '+' : '-'}{formatRupiah(t.amount)}
-                          </td>
-                          <td className="px-4 py-3 text-center">
-                            <button onClick={() => handleDeleteTransaction(t.id)} className="text-slate-400 hover:text-rose-600 font-bold">Hapus</button>
+                      {filteredTransactions.length === 0 ? (
+                        <tr>
+                          <td colSpan="5" className="px-4 py-8 text-center text-slate-400">
+                            Belum ada transaksi. Klik "Catat Order" atau "Belanja" untuk mulai mengisi kas Sugar Bloom! 🍩
                           </td>
                         </tr>
-                      ))}
+                      ) : (
+                        filteredTransactions.map(t => (
+                          <tr key={t.id} className="hover:bg-slate-50">
+                            <td className="px-4 py-3 text-slate-500">
+                              {new Date(t.date).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })}
+                            </td>
+                            <td className="px-4 py-3 font-bold text-slate-900">{t.description}</td>
+                            <td className="px-4 py-3"><span className="px-2 py-0.5 rounded bg-slate-100 font-bold">{t.account}</span></td>
+                            <td className={`px-4 py-3 text-right font-bold text-sm ${t.type === 'INCOME' ? 'text-emerald-600' : 'text-rose-600'}`}>
+                              {t.type === 'INCOME' ? '+' : '-'}{formatRupiah(t.amount)}
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              <button
+                                onClick={() => handleDeleteTransaction(t.id)}
+                                className="text-rose-600 hover:bg-rose-50 px-2 py-1 rounded font-bold text-xs"
+                              >
+                                Hapus
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
