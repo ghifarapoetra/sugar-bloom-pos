@@ -11,6 +11,9 @@
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   
+  <!-- OCR Library Tesseract.js for Receipt Scanning -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   
   <style>
@@ -36,7 +39,7 @@
     };
 
     // Constant Options
-    const ACCOUNTS = ['BCA', 'BSI', 'Bank Jago', 'blu', 'Tunai', 'QRIS'];
+    const ACCOUNTS = ['Bank Jago', 'BCA', 'BSI', 'blu', 'Tunai', 'QRIS'];
     const TOPPINGS = ['Susu Coklat', 'Susu Putih'];
     const EXPENSE_CATEGORIES = [
       'Belanja Bahan Baku (Labu/Ubi/Tepung)',
@@ -52,10 +55,8 @@
       { id: 'p2', name: 'Donat Ubi Ungu', price: 3000, desc: 'Donat ubi ungu pilihan, manis & lezat', active: true },
     ];
 
-    // Transaksi awal diset KOSONG agar saldo mulai dari Rp 0
     const DEFAULT_TRANSACTIONS = [];
 
-    // Main React Application
     function App() {
       const [activeTab, setActiveTab] = useState('order');
 
@@ -89,7 +90,7 @@
       const [orderCustomerName, setOrderCustomerName] = useState('');
       const [orderCustomerPhone, setOrderCustomerPhone] = useState('');
       const [orderPaymentStatus, setOrderPaymentStatus] = useState('Lunas');
-      const [orderPaymentAccount, setOrderPaymentAccount] = useState('BCA');
+      const [orderPaymentAccount, setOrderPaymentAccount] = useState('Bank Jago');
       const [orderNotes, setOrderNotes] = useState('');
       const [cartItems, setCartItems] = useState({});
 
@@ -102,6 +103,10 @@
       const [expenseCategory, setExpenseCategory] = useState(EXPENSE_CATEGORIES[0]);
       const [expenseAccount, setExpenseAccount] = useState('Tunai');
       const [expenseDesc, setExpenseDesc] = useState('');
+      
+      // OCR Scan Struk State
+      const [isScanning, setIsScanning] = useState(false);
+      const [scanProgress, setScanProgress] = useState('');
 
       // Ledger Filters
       const [searchQuery, setSearchQuery] = useState('');
@@ -114,12 +119,82 @@
       const [newProdPrice, setNewProdPrice] = useState('3000');
       const [newProdDesc, setNewProdDesc] = useState('');
 
-      // Qty counter handler
+      // Qty counter handler (+ / -)
       const handleQtyChange = (productId, topping, delta) => {
         const key = `${productId}_${topping}`;
         const current = cartItems[key] || 0;
         const next = Math.max(0, current + delta);
         setCartItems({ ...cartItems, [key]: next });
+      };
+
+      // Qty counter manual input handler (Ketik angka misal: 50)
+      const handleDirectQtyChange = (productId, topping, value) => {
+        const key = `${productId}_${topping}`;
+        const num = parseInt(value, 10);
+        setCartItems({ ...cartItems, [key]: isNaN(num) || num < 0 ? 0 : num });
+      };
+
+      // Scan Struk Belanja dengan OCR Tesseract.js
+      const handleReceiptUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        setIsScanning(true);
+        setScanProgress('Membaca foto struk...');
+
+        try {
+          if (window.Tesseract) {
+            const result = await window.Tesseract.recognize(file, 'eng', {
+              logger: m => {
+                if (m.status === 'recognizing text') {
+                  setScanProgress(`Membaca teks struk... ${Math.round(m.progress * 100)}%`);
+                }
+              }
+            });
+
+            const text = result.data.text;
+            const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
+            // Deteksi angka nominal terbesar / total
+            const numberMatches = text.match(/(?:rp|total|subtotal|bayar|cash)?\s*[\:\=]?\s*([0-9]{1,3}(?:[\.\,][0-9]{3})+|[0-9]{4,})/gi);
+            
+            let detectedAmount = 0;
+            if (numberMatches) {
+              const numbers = numberMatches.map(m => {
+                const numStr = m.replace(/[^0-9]/g, '');
+                return parseInt(numStr, 10);
+              }).filter(n => n >= 1000 && n <= 10000000);
+
+              if (numbers.length > 0) {
+                detectedAmount = Math.max(...numbers);
+              }
+            }
+
+            // Deteksi 2 baris awal sebagai nama toko/supplier
+            let detectedStore = '';
+            if (lines.length > 0) {
+              detectedStore = lines.slice(0, 2).join(' ').replace(/[^a-zA-Z0-9\s]/g, '');
+            }
+
+            if (detectedAmount > 0) {
+              setExpenseAmount(detectedAmount.toString());
+            }
+            if (detectedStore) {
+              setExpenseDesc(`Struk Belanja: ${detectedStore}`);
+            }
+
+            showToast('📸 Foto struk berhasil dibaca!');
+          } else {
+            showToast('⚠️ Fitur scanner memerlukan jaringan internet.');
+          }
+        } catch (err) {
+          console.error("OCR Error:", err);
+          showToast('⚠️ Gagal membaca struk. Silakan isi manual.');
+        } finally {
+          setIsScanning(false);
+          setScanProgress('');
+          e.target.value = '';
+        }
       };
 
       // Compute Cart Details
@@ -149,7 +224,7 @@
         return { total, itemsList };
       }, [cartItems, products]);
 
-      // Cashflow Metrics (Otomatis terhitung ulang saat transaksi ditambah/dihapus)
+      // Cashflow Metrics
       const cashFlowMetrics = useMemo(() => {
         let totalIncome = 0;
         let totalExpense = 0;
@@ -249,7 +324,6 @@
         showToast('💸 Pengeluaran belanja berhasil dicatat!');
       };
 
-      // Fitur Hapus Transaksi Tunggal
       const handleDeleteTransaction = (id) => {
         if (confirm('Apakah Anda yakin ingin menghapus transaksi ini? Saldo akan dihitung ulang.')) {
           setTransactions(transactions.filter(t => t.id !== id));
@@ -257,7 +331,6 @@
         }
       };
 
-      // Fitur Reset Semua Data Transaksi ke Rp 0
       const handleResetAllTransactions = () => {
         if (confirm('⚠️ Yakin ingin menghapus seluruh riwayat transaksi? Semua saldo akan kembali ke Rp 0.')) {
           setTransactions([]);
@@ -266,11 +339,22 @@
         }
       };
 
-      // WA Invoice Text Generator
+      // WA Invoice Text Generator dengan Detail Bank Jago Syariah jika Non-Tunai
       const generateWaText = (inv) => {
         if (!inv) return '';
         const itemLines = inv.items.map(i => `• ${i.qty}x ${i.name} (@ ${formatRupiah(i.price)}) = ${formatRupiah(i.subtotal)}`).join('\n');
         
+        const isTransfer = inv.account !== 'Tunai';
+
+        const transferBlock = isTransfer ? `
+-----------------------------------
+*Rekening Pembayaran / Transfer:*
+Bank Jago Syariah
+*500757108100*
+A.n. Putri Artha Yusmika Dewi
+
+❗ *Harap menyertakan bukti transfer*` : '';
+
         return `🍩 *INVOICE SUGAR BLOOM*
 -----------------------------------
 Halo Kak *${inv.customerName}*, terima kasih sudah order!
@@ -280,7 +364,7 @@ ${itemLines}
 ${inv.notes ? `\n*Catatan:* ${inv.notes}` : ''}
 -----------------------------------
 *TOTAL:* *${formatRupiah(inv.total)}*
-*Status Pembayaran:* ${inv.status.toUpperCase()} (${inv.account})
+*Status Pembayaran:* ${inv.status.toUpperCase()} (${inv.account})${transferBlock}
 -----------------------------------
 Terima kasih sudah mendukung langkah kecil Sugar Bloom. Semoga setiap gigitan membawa kebahagiaan. 🤎`;
       };
@@ -301,9 +385,19 @@ Terima kasih sudah mendukung langkah kecil Sugar Bloom. Semoga setiap gigitan me
         setTimeout(() => setIsCopied(false), 2000);
       };
 
+      // Kirim WA Langsung ke Nomor HP Pelanggan
       const openWhatsAppDirect = () => {
         const text = encodeURIComponent(generateWaText(activeInvoice));
-        const phone = activeInvoice.customerPhone ? activeInvoice.customerPhone.replace(/[^0-9]/g, '') : '';
+        let phone = activeInvoice.customerPhone ? activeInvoice.customerPhone.replace(/[^0-9]/g, '') : '';
+        
+        if (phone) {
+          if (phone.startsWith('0')) {
+            phone = '62' + phone.slice(1);
+          } else if (phone.startsWith('8')) {
+            phone = '62' + phone;
+          }
+        }
+
         const url = phone ? `https://wa.me/${phone}?text=${text}` : `https://wa.me/?text=${text}`;
         window.open(url, '_blank');
       };
@@ -443,7 +537,7 @@ Terima kasih sudah mendukung langkah kecil Sugar Bloom. Semoga setiap gigitan me
 
                         <div className="pt-2 border-t border-slate-100 space-y-2">
                           <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                            Pilih Topping:
+                            Pilih Topping & Jumlah (Bisa Ketik Langsung):
                           </p>
 
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -464,14 +558,23 @@ Terima kasih sudah mendukung langkah kecil Sugar Bloom. Semoga setiap gigitan me
                                     </div>
                                   </div>
 
-                                  <div className="flex items-center gap-2">
+                                  <div className="flex items-center gap-1.5">
                                     <button
                                       type="button"
                                       onClick={() => handleQtyChange(prod.id, topping, -1)}
                                       disabled={qty === 0}
-                                      className="w-7 h-7 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold text-xs disabled:opacity-30"
+                                      className="w-7 h-7 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold text-xs disabled:opacity-30 hover:bg-slate-100"
                                     > - </button>
-                                    <span className="w-5 text-center font-bold text-xs">{qty}</span>
+                                    
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      value={qty === 0 ? '' : qty}
+                                      placeholder="0"
+                                      onChange={(e) => handleDirectQtyChange(prod.id, topping, e.target.value)}
+                                      className="w-14 text-center font-bold text-xs bg-white border border-slate-300 rounded-lg py-1 focus:ring-2 focus:ring-orange-400 focus:outline-none"
+                                    />
+
                                     <button
                                       type="button"
                                       onClick={() => handleQtyChange(prod.id, topping, 1)}
@@ -526,10 +629,10 @@ Terima kasih sudah mendukung langkah kecil Sugar Bloom. Semoga setiap gigitan me
                       </div>
 
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">No. WhatsApp (Opsional)</label>
+                        <label className="block text-xs font-bold text-slate-700 uppercase mb-1">No. WhatsApp Pelanggan</label>
                         <input
                           type="text"
-                          placeholder="Contoh: 08123456789"
+                          placeholder="Contoh: 081234567890"
                           value={orderCustomerPhone}
                           onChange={(e) => setOrderCustomerPhone(e.target.value)}
                           className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm font-medium focus:ring-2 focus:ring-orange-400 outline-none"
@@ -551,7 +654,7 @@ Terima kasih sudah mendukung langkah kecil Sugar Bloom. Semoga setiap gigitan me
                         </div>
 
                         <div>
-                          <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Rekening Masuk</label>
+                          <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Metode / Rekening</label>
                           <select
                             value={orderPaymentAccount}
                             onChange={(e) => setOrderPaymentAccount(e.target.value)}
@@ -590,11 +693,45 @@ Terima kasih sudah mendukung langkah kecil Sugar Bloom. Semoga setiap gigitan me
             {/* TAB 2: EXPENSES */}
             {activeTab === 'expense' && (
               <div className="max-w-2xl mx-auto">
-                <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
-                  <h2 className="font-bold text-slate-800 text-base mb-4">Catat Pengeluaran Belanja</h2>
+                <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">
+                  <h2 className="font-bold text-slate-800 text-base">Catat Pengeluaran Belanja</h2>
+
+                  {/* OCR Scan Struk Belanja Box */}
+                  <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
+                          <span>📸 Scan Foto Struk Belanja</span>
+                        </h4>
+                        <p className="text-[11px] text-slate-500 mt-0.5">
+                          Foto struk toko, nominal & nama toko terisi otomatis!
+                        </p>
+                      </div>
+                      
+                      <label className="cursor-pointer bg-gradient-to-r from-orange-500 to-amber-500 text-white px-3.5 py-2 rounded-xl text-xs font-bold shadow-md hover:from-orange-600 flex items-center gap-1.5 shrink-0">
+                        <span>📷 Foto Struk</span>
+                        <input 
+                          type="file" 
+                          accept="image/*" 
+                          capture="environment" 
+                          onChange={handleReceiptUpload} 
+                          className="hidden" 
+                          disabled={isScanning}
+                        />
+                      </label>
+                    </div>
+
+                    {isScanning && (
+                      <div className="mt-3 flex items-center gap-2 text-xs font-bold text-orange-600 bg-white p-2.5 rounded-xl border border-orange-200">
+                        <div className="w-4 h-4 border-2 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
+                        <span>{scanProgress}</span>
+                      </div>
+                    )}
+                  </div>
+
                   <form onSubmit={handleSaveExpense} className="space-y-4">
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Nominal (Rp) *</label>
+                      <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Nominal Belanja (Rp) *</label>
                       <input
                         type="number"
                         placeholder="0"
